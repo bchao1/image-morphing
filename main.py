@@ -2,7 +2,7 @@ import cv2
 import dlib
 import numpy as np
 from scipy.ndimage import map_coordinates
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 from tqdm import tqdm
 
 landmark_dict = {
@@ -16,6 +16,29 @@ landmark_dict = {
     "lips_outer": np.arange(48, 60),
     "face": np.arange(0, 17),
 }
+
+def get_face_silhouette():
+    lines = []
+    lines_face = np.stack([landmark_dict["face"][:-1], landmark_dict["face"][1:]]).T
+    lines.append(lines_face)
+    lines.append(np.array([16, 26]).reshape(1, 2)) # join face and right eyebrow
+    lines_right_eyebrow = np.stack([landmark_dict["right_eyebrow"][::-1][:-1], landmark_dict["right_eyebrow"][::-1][1:]]).T
+    lines.append(lines_right_eyebrow)
+    lines.append(np.array([22, 21]).reshape(1, 2))
+    lines_left_eyebrow = np.stack([landmark_dict["left_eyebrow"][::-1][:-1], landmark_dict["left_eyebrow"][::-1][1:]]).T
+    lines.append(lines_left_eyebrow)
+    lines.append(np.array([17, 0]).reshape(1, 2))
+    lines = np.concatenate(lines)
+    return lines
+
+def get_face_outline_coordinates(landmarks):
+    facial_landmark_ids = [
+        *landmark_dict["face"],
+        *landmark_dict["right_eyebrow"][::-1],
+        *landmark_dict["left_eyebrow"][::-1]
+    ]
+    return landmarks[facial_landmark_ids]
+
 
 def get_landmark_lines():
     lines = []
@@ -37,7 +60,7 @@ def shape_to_np(shape, dtype="int"):
 	# return the list of (x, y)-coordinates
 	return np.array(coords)
 
-def draw_landmarks(img, lines_start, lines_end, landmarks, path, pts=None):
+def draw_landmarks(img, lines_start, lines_end, landmarks, path):
     img = Image.fromarray(img)
     canvas = ImageDraw.Draw(img)
     # draw landmark points
@@ -149,22 +172,52 @@ def get_intermidate_lines(P_1, Q_1, P_2, Q_2, alpha = 0.5):
     Q = Q_1 * alpha + Q_2 * (1 - alpha)
     return P, Q
 
-def warp_and_merge(img_1, P_1, Q_1, img_2, P_2, Q_2, alpha):
+def get_intermediate_face_outline(face1, face2, alpha = 0.5):
+    return face1 * alpha + face2 * (1 - alpha)
+
+def get_face_mask(face_outline, image_size):
+    face_x = list(face_outline[:, 0])
+    face_y = list(face_outline[:, 1])
+    mask = Image.new("RGB", (image_size, image_size))
+    canvas = ImageDraw.Draw(mask)
+    canvas.polygon(list(zip(face_x, face_y)), fill = (255, 255, 255))
+    mask = np.array(mask) * 1.0 / 255
+    return mask
+
+def compute_bokeh_image(face, mask):
+    blurred = Image.fromarray(face).filter(ImageFilter.GaussianBlur(2))
+    blurred = np.array(blurred)
+    res = face * mask + blurred * (1 - mask)
+    res = res.astype(np.uint8)
+    return res
+
+def warp_and_merge(img_1, P_1, Q_1, img_2, P_2, Q_2, alpha, face_mask = None):
     P_inter, Q_inter = get_intermidate_lines(P_1, Q_1, P_2, Q_2, alpha)
     warped_1 = warp_from_source(img_1, P_1, Q_1, P_inter, Q_inter)
     warped_2 = warp_from_source(img_2, P_2, Q_2, P_inter, Q_inter)
     merged = warped_1 * alpha + warped_2 * (1 - alpha)
     merged = merged.astype(np.uint8)
+    if face_mask is not None:
+        merged = compute_bokeh_image(merged, face_mask)
     return merged
 
-def warp_sequence(img_1, P_1, Q_1, img_2, P_2, Q_2, steps=10):
-    warp_sequence = []
-    for alpha in np.linspace(0, 1.0, steps):
-        merged = warp_and_merge(color_img_1, P_1, Q_1, color_img_2, P_2, Q_2, alpha)
-        warp_sequence.append(merged)
-    return warp_sequence
+def warp_sequence(
+    img_1, P_1, Q_1, 
+    img_2, P_2, Q_2, steps=10, 
+    face1_outline = None, face2_outline = None
+):
+    assert (face1_outline is None) == (face2_outline is None)
 
-    
+    warp_sequence = []
+    for alpha in tqdm(np.linspace(0, 1.0, steps)):
+        if face1_outline is not None:
+            face_mask = get_face_mask(
+                get_intermediate_face_outline(face1_outline, face2_outline, alpha), img_1.shape[0])
+        else:
+            face_mask = None
+        merged = warp_and_merge(color_img_1, P_1, Q_1, color_img_2, P_2, Q_2, alpha, face_mask)
+        warp_sequence.append(Image.fromarray(merged))
+    return warp_sequence
 
 
 predictor_path = "pretrained/shape_predictor_68_face_landmarks.dat"
@@ -184,9 +237,15 @@ img_2, color_img_2 = crop_resize_from_feature_points(image_path_2, detector, pre
 P_1, Q_1, landmarks_1 = get_line_start_and_end(img_1, detector, predictor)
 P_2, Q_2, landmarks_2  = get_line_start_and_end(img_2, detector, predictor)
 
+face1_outline = get_face_outline_coordinates(landmarks_1)
+face2_outline = get_face_outline_coordinates(landmarks_2)
 
-alpha = 0.5
 
-morphed = warp_and_merge(color_img_1, P_1, Q_1, color_img_2, P_2, Q_2, 0.5)
-Image.fromarray(morphed).save("warped.png")
+draw_landmarks(color_img_1, P_1, Q_1, landmarks_1, "images/1.png")
+draw_landmarks(color_img_2, P_2, Q_2, landmarks_2, "images/2.png")
+
+seq = warp_sequence(color_img_1, P_1, Q_1, color_img_2, P_2, Q_2, 10, face1_outline, face2_outline)
+seq[0].save("sequence.gif", save_all=True, append_images=seq[1:], duration=5, loop=0)
+
+
 
