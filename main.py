@@ -1,9 +1,11 @@
+import os
 import cv2
 import dlib
 import numpy as np
 from scipy.ndimage import map_coordinates
 from PIL import Image, ImageDraw, ImageFilter
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 landmark_dict = {
     "left_eye": np.arange(36, 42),
@@ -220,14 +222,21 @@ def warp_sequence(
     return warp_sequence
 
 
+image_dir = "images"
 predictor_path = "pretrained/shape_predictor_68_face_landmarks.dat"
-image_path_1 = "images/aragaki.png" # source
-image_path_2 = "images/hoshino.jpg" # destination
+image_paths = os.listdir(image_dir)
+np.random.shuffle(image_paths)
+face_ids = np.random.choice(np.arange(len(image_paths)), 2, replace=False)
+image_path_1 = os.path.join(image_dir, image_paths[face_ids[0]])
+image_path_2 = os.path.join(image_dir, image_paths[face_ids[1]])
+
+print(image_path_1, image_path_2)
 
 image_size = 256
 b = 2
 p = 0.5
 a = 1
+alpha = 0.5
 
 detector = dlib.get_frontal_face_detector()
 predictor = dlib.shape_predictor(predictor_path)
@@ -240,12 +249,13 @@ P_2, Q_2, landmarks_2  = get_line_start_and_end(img_2, detector, predictor)
 face1_outline = get_face_outline_coordinates(landmarks_1)
 face2_outline = get_face_outline_coordinates(landmarks_2)
 
+merged = warp_and_merge(color_img_1, P_1, Q_1, color_img_2, P_2, Q_2, alpha)
 
-draw_landmarks(color_img_1, P_1, Q_1, landmarks_1, "images/1.png")
-draw_landmarks(color_img_2, P_2, Q_2, landmarks_2, "images/2.png")
+plt.imshow(merged)
+plt.show()
 
-seq = warp_sequence(color_img_1, P_1, Q_1, color_img_2, P_2, Q_2, 10, face1_outline, face2_outline)
-seq[0].save("sequence.gif", save_all=True, append_images=seq[1:], duration=5, loop=0)
+#seq = warp_sequence(color_img_1, P_1, Q_1, color_img_2, P_2, Q_2, 10, face1_outline, face2_outline)
+#seq[0].save("sequence.gif", save_all=True, append_images=seq[1:], duration=5, loop=0)
 
 
 
