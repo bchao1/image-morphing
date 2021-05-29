@@ -1,0 +1,19 @@
+body {
+   text-align: center;
+   font-family: "Rubik";
+   color: white;
+   background-color: black;
+}
+
+h3{
+   margin-top: 100px;
+}
+
+#morph-result{
+   border: 1px solid white;
+}
+
+#new-morph-btn {
+   font-family: "Rubik";
+   cursor: pointer;
+}
