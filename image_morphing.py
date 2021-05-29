@@ -211,15 +211,22 @@ def warp_and_merge(img_1, P_1, Q_1, img_2, P_2, Q_2, alpha, face_mask = None):
     return merged
 
 def warp_sequence(
-    img_1, P_1, Q_1, 
-    img_2, P_2, Q_2, steps=10, 
-    face1_outline = None, face2_outline = None
+    image_path_1, image_path_2, steps = 10, use_face_mask = False
 ):
-    assert (face1_outline is None) == (face2_outline is None)
+    detector = dlib.get_frontal_face_detector()
+    predictor = dlib.shape_predictor(predictor_path)
+
+    img_1, color_img_1 = crop_resize_from_feature_points(image_path_1, detector, predictor, image_size)
+    img_2, color_img_2 = crop_resize_from_feature_points(image_path_2, detector, predictor, image_size)
+    P_1, Q_1, landmarks_1 = get_line_start_and_end(img_1, detector, predictor)
+    P_2, Q_2, landmarks_2  = get_line_start_and_end(img_2, detector, predictor)
+    
+    face1_outline = get_face_outline_coordinates(landmarks_1)
+    face2_outline = get_face_outline_coordinates(landmarks_2)
 
     warp_sequence = []
     for alpha in tqdm(np.linspace(0, 1.0, steps)):
-        if face1_outline is not None:
+        if use_face_mask:
             face_mask = get_face_mask(
                 get_intermediate_face_outline(face1_outline, face2_outline, alpha), img_1.shape[0])
         else:
@@ -275,6 +282,20 @@ def get_random_morph():
     name2 = get_name_from_file(image_paths[face_ids[1]])
     return morph_image(image_path_1, image_path_2, 0.5, True), name1, name2
 
+def generate_warp_video(num_images, filename):
+    warp_seq = []
+    image_files = list(np.random.choice(image_paths, num_images, replace=False))
+    image_files.append(image_files[0]) # loop to first image
+    print(image_files)
+    for i in range(len(image_files) - 1):
+        image_path_1 = os.path.join(image_dir, image_files[i])
+        image_path_2 = os.path.join(image_dir, image_files[i + 1])
+        warp_seq.extend(warp_sequence(image_path_2, image_path_1, 10, True))
+    
+    warp_seq[0].save(filename, 
+        save_all=True, append_images=warp_seq[1:], duration=2*num_images, loop=0)
+
 if __name__ == "__main__":
-    img = morph_image("images/angelina_jolie.jpg", "images/brad_pitt.jpg", 0.5, True)
-    img.save("results/warped_a{}_b{}_p{}.png".format(a, b, p))
+    #img = morph_image("images/angelina_jolie.jpg", "images/brad_pitt.jpg", 0.5, True)
+    #img.save("results/warped_a{}_b{}_p{}.png".format(a, b, p))
+    generate_warp_video(10, "results/sequence.gif")
