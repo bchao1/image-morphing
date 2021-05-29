@@ -25,20 +25,6 @@ landmark_dict = {
     "face": np.arange(0, 17),
 }
 
-def get_face_silhouette():
-    lines = []
-    lines_face = np.stack([landmark_dict["face"][:-1], landmark_dict["face"][1:]]).T
-    lines.append(lines_face)
-    lines.append(np.array([16, 26]).reshape(1, 2)) # join face and right eyebrow
-    lines_right_eyebrow = np.stack([landmark_dict["right_eyebrow"][::-1][:-1], landmark_dict["right_eyebrow"][::-1][1:]]).T
-    lines.append(lines_right_eyebrow)
-    lines.append(np.array([22, 21]).reshape(1, 2))
-    lines_left_eyebrow = np.stack([landmark_dict["left_eyebrow"][::-1][:-1], landmark_dict["left_eyebrow"][::-1][1:]]).T
-    lines.append(lines_left_eyebrow)
-    lines.append(np.array([17, 0]).reshape(1, 2))
-    lines = np.concatenate(lines)
-    return lines
-
 def get_face_outline_coordinates(landmarks):
     facial_landmark_ids = [
         *landmark_dict["face"],
@@ -128,6 +114,13 @@ def get_line_start_and_end(img, detector, predictor, use_delaunay=False):
     landmarks = predictor(img, rect)
     landmarks = shape_to_np(landmarks) # pixel coordinates (x, y)
     if use_delaunay:
+        corners = np.array([
+            [0, 0],
+            [0, image_size],
+            [image_size, 0],
+            [image_size, image_size]
+        ])
+        landmarks = np.concatenate([landmarks, corners])
         lines = get_landmark_lines_delaunay(landmarks) # line id (start, end)
     else:
         lines = get_landmark_lines_fixed()
@@ -143,12 +136,13 @@ def perpendicular_vector(v):
     p = np.cross(v_homo, z_axis)
     p = p[:, :-1] # ignore z axis
     p_length = np.sqrt(np.sum(p**2, axis=1, keepdims=True))
-    p /= p_length # now sum = 1
+    p = p / (p_length + 1e-8) # now sum = 1
     p *= v_length
     return p
 
 def warp_from_source(img_s, P_s, Q_s, P_d, Q_d):
     assert img_s.shape[0] == img_s.shape[1]
+    eps = 1e-8
 
     perp_d = perpendicular_vector(Q_d - P_d)
     perp_s = perpendicular_vector(Q_s - P_s)
@@ -161,12 +155,12 @@ def warp_from_source(img_s, P_s, Q_s, P_d, Q_d):
     X_d = X_d.reshape(-1, 1, 2)
     to_p_vec = X_d - P_d
     to_q_vec = X_d - Q_d
-    u = np.sum(to_p_vec * dest_line_vec, axis=-1) / np.sum(dest_line_vec**2, axis=1)
-    v = np.sum(to_p_vec * perp_d, axis=-1) / np.sqrt(np.sum(dest_line_vec**2, axis=1))
+    u = np.sum(to_p_vec * dest_line_vec, axis=-1) / (np.sum(dest_line_vec**2, axis=1) + eps)
+    v = np.sum(to_p_vec * perp_d, axis=-1) / (np.sqrt(np.sum(dest_line_vec**2, axis=1)) + eps)
 
     X_s = np.expand_dims(P_s, 0) + \
         np.expand_dims(u, -1) * np.expand_dims(source_line_vec, 0) + \
-        np.expand_dims(v, -1) * np.expand_dims(perp_s, 0) / np.sqrt(np.sum(source_line_vec**2, axis=1)).reshape(1, -1, 1)
+        np.expand_dims(v, -1) * np.expand_dims(perp_s, 0) / (np.sqrt(np.sum(source_line_vec**2, axis=1)).reshape(1, -1, 1) + eps)
     D = X_s - X_d
     to_p_mask = (u < 0).astype(np.float64)
     to_q_mask = (u > 1).astype(np.float64)
@@ -177,8 +171,8 @@ def warp_from_source(img_s, P_s, Q_s, P_d, Q_d):
     to_line_dist = np.abs(v)
     dist = to_p_dist * to_p_mask + to_q_dist * to_q_mask + to_line_dist * to_line_mask
     dest_line_length = np.sqrt(np.sum(dest_line_vec**2, axis=-1))
-    weight = ((dest_line_length**p) / (a + dist))**b
-    weighted_D = np.sum(D * np.expand_dims(weight, -1), axis=1) / np.sum(weight, -1, keepdims=True)
+    weight = ((dest_line_length**p) / ((a + dist))**b + eps)
+    weighted_D = np.sum(D * np.expand_dims(weight, -1), axis=1) / (np.sum(weight, -1, keepdims=True) + eps)
 
     X_d = X_d.squeeze()
     X_s = X_d + weighted_D
@@ -233,16 +227,20 @@ def warp_and_merge(img_1, P_1, Q_1, img_2, P_2, Q_2, alpha, face_mask = None):
     return merged
 
 def morph_sequence(
-    image_path_1, image_path_2, steps = 10, use_face_mask = False
+    image_path_1, image_path_2, steps = 10, use_face_mask = False, use_delaunay = False
 ):
     detector = dlib.get_frontal_face_detector()
     predictor = dlib.shape_predictor(predictor_path)
 
     img_1, color_img_1 = crop_resize_from_feature_points(image_path_1, detector, predictor, image_size)
     img_2, color_img_2 = crop_resize_from_feature_points(image_path_2, detector, predictor, image_size)
-    P_1, Q_1, landmarks_1 = get_line_start_and_end(img_1, detector, predictor)
-    P_2, Q_2, landmarks_2  = get_line_start_and_end(img_2, detector, predictor)
-    
+    P_1, Q_1, landmarks_1, lines_1 = get_line_start_and_end(img_1, detector, predictor, use_delaunay)
+    P_2, Q_2, landmarks_2, _  = get_line_start_and_end(img_2, detector, predictor, use_delaunay)
+    if use_delaunay:
+        P_2 = landmarks_2[lines_1[:, 0]]
+        Q_2 = landmarks_2[lines_1[:, 1]]
+    print("Num lines:", len(lines_1))
+
     face1_outline = get_face_outline_coordinates(landmarks_1)
     face2_outline = get_face_outline_coordinates(landmarks_2)
 
@@ -278,7 +276,8 @@ def morph_image(image_path_1, image_path_2, alpha, use_face_mask=False, use_dela
     
     face1_outline = get_face_outline_coordinates(landmarks_1)
     face2_outline = get_face_outline_coordinates(landmarks_2)
-    #draw_landmarks(color_img_1, P_1, Q_1, landmarks_1, "results/landmarks.png")
+    draw_landmarks(color_img_1, P_1, Q_1, landmarks_1, "results/landmarks.png")
+    draw_landmarks(color_img_2, P_2, Q_2, landmarks_2, "results/landmarks2.png")
 
     if use_face_mask:
         face_mask = get_face_mask(get_intermediate_face_outline(
@@ -305,7 +304,7 @@ def generate_morph_video(num_images, filename):
     for i in range(len(image_files) - 1):
         image_path_1 = os.path.join(image_dir, image_files[i])
         image_path_2 = os.path.join(image_dir, image_files[i + 1])
-        warp_seq.extend(warp_sequence(image_path_2, image_path_1, 10, True))
+        warp_seq.extend(morph_sequence(image_path_2, image_path_1, 10, True, False))
     
     warp_seq[0].save(filename, 
         save_all=True, append_images=warp_seq[1:], duration=5*num_images, loop=0)
@@ -323,7 +322,8 @@ np.random.shuffle(image_paths)
 
 if __name__ == "__main__":
     start = time()
-    img = morph_image("images/yui_aragaki.png", "images/hoshino_gen.jpg", 0.5, True, False)
+    img = morph_image("images/yui_aragaki.png", "images/hoshino_gen.jpg", 0.5, True, True)
     print("Spent: ", time() - start)
-    img.save("results/warped_test.png".format(a, b, p))
-    #generate_morph_video(10, "results/sequence.gif")
+    img.save("results/warped_delaunay.png".format(a, b, p))
+    #seq = morph_sequence("images/brad_pitt.jpg", "images/angelina_jolie.jpg", 10, True, True)
+    #seq[0].save("results/brad2jolie_delaunay.gif", save_all=True, append_images=seq[1:], duration=5, loop=0)
