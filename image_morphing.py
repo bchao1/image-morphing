@@ -1,13 +1,17 @@
-import os
 import cv2
 import dlib
 import numpy as np
 from scipy.ndimage import map_coordinates
+from scipy.spatial import Delaunay
 from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
+
+import os
+from time import time
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+
 from utils import get_name_from_file
-from time import time
+
 
 landmark_dict = {
     "left_eye": np.arange(36, 42),
@@ -44,13 +48,28 @@ def get_face_outline_coordinates(landmarks):
     return landmarks[facial_landmark_ids]
 
 
-def get_landmark_lines():
+def get_landmark_lines_fixed():
     lines = []
     for key, pts in landmark_dict.items():
         coords = np.stack([pts[:-1], pts[1:]]).T
         lines.append(coords)
     lines = np.concatenate(lines)
     return lines
+
+def get_landmark_lines_delaunay(landmarks):
+    tri = Delaunay(landmarks).simplices
+    unique_lines = set()
+    for pts in tri:
+        p1, p2, p3 = list(sorted(pts))
+        unique_lines.add((p1, p2))
+        unique_lines.add((p2, p3))
+        unique_lines.add((p1, p3))
+    lines = []
+    for x, y in unique_lines:
+        lines.append([x, y])
+    lines = np.array(lines)
+    return lines
+
 
 def shape_to_np(shape, dtype="int"):
 	# initialize the list of (x, y)-coordinates
@@ -104,14 +123,17 @@ def crop_resize_from_feature_points(path, detector, predictor, size=256):
     color_resized = cv2.resize(cropped_color_img, dsize=(size, size))
     return gray_resized, color_resized
 
-def get_line_start_and_end(img, detector, predictor):
+def get_line_start_and_end(img, detector, predictor, use_delaunay=False):
     rect = detector(img, 1)[0]
     landmarks = predictor(img, rect)
     landmarks = shape_to_np(landmarks) # pixel coordinates (x, y)
-    lines = get_landmark_lines() # line id (start, end)
+    if use_delaunay:
+        lines = get_landmark_lines_delaunay(landmarks) # line id (start, end)
+    else:
+        lines = get_landmark_lines_fixed()
     P = landmarks[lines[:, 0]] # P, line start
     Q = landmarks[lines[:, 1]] # Q, line end
-    return P.astype(np.float64), Q.astype(np.float64), landmarks
+    return P.astype(np.float64), Q.astype(np.float64), landmarks, lines
 
 def perpendicular_vector(v):
     v_length = np.sqrt(np.sum(v**2, axis=1, keepdims=True))
@@ -210,7 +232,7 @@ def warp_and_merge(img_1, P_1, Q_1, img_2, P_2, Q_2, alpha, face_mask = None):
         merged = compute_bokeh_image(merged, face_mask)
     return merged
 
-def warp_sequence(
+def morph_sequence(
     image_path_1, image_path_2, steps = 10, use_face_mask = False
 ):
     detector = dlib.get_frontal_face_detector()
@@ -235,35 +257,28 @@ def warp_sequence(
         warp_sequence.append(Image.fromarray(merged))
     return warp_sequence
 
-image_size = 256
-b = 2
-p = 0.5
-a = 1
-alpha = 0.5
-
-image_dir = "images"
-predictor_path = "pretrained/shape_predictor_68_face_landmarks.dat"
-image_paths = os.listdir(image_dir)
-np.random.shuffle(image_paths)
-
-
 def naive_morph(img1, img2, alpha):
     img = img1 * alpha + img2 * (1 - alpha)
     img = img.astype(np.uint8)
     return Image.fromarray(img)
 
 
-def morph_image(image_path_1, image_path_2, alpha, use_face_mask=False):
+def morph_image(image_path_1, image_path_2, alpha, use_face_mask=False, use_delaunay=False):
     detector = dlib.get_frontal_face_detector()
     predictor = dlib.shape_predictor(predictor_path)
 
     img_1, color_img_1 = crop_resize_from_feature_points(image_path_1, detector, predictor, image_size)
     img_2, color_img_2 = crop_resize_from_feature_points(image_path_2, detector, predictor, image_size)
-    P_1, Q_1, landmarks_1 = get_line_start_and_end(img_1, detector, predictor)
-    P_2, Q_2, landmarks_2  = get_line_start_and_end(img_2, detector, predictor)
+    P_1, Q_1, landmarks_1, lines_1 = get_line_start_and_end(img_1, detector, predictor, use_delaunay)
+    P_2, Q_2, landmarks_2, _  = get_line_start_and_end(img_2, detector, predictor, use_delaunay)
+    if use_delaunay:
+        P_2 = landmarks_2[lines_1[:, 0]]
+        Q_2 = landmarks_2[lines_1[:, 1]]
+    print("Num lines:", len(lines_1))
     
     face1_outline = get_face_outline_coordinates(landmarks_1)
     face2_outline = get_face_outline_coordinates(landmarks_2)
+    #draw_landmarks(color_img_1, P_1, Q_1, landmarks_1, "results/landmarks.png")
 
     if use_face_mask:
         face_mask = get_face_mask(get_intermediate_face_outline(
@@ -282,7 +297,7 @@ def get_random_morph():
     name2 = get_name_from_file(image_paths[face_ids[1]])
     return morph_image(image_path_1, image_path_2, 0.5, True), name1, name2
 
-def generate_warp_video(num_images, filename):
+def generate_morph_video(num_images, filename):
     warp_seq = []
     image_files = list(np.random.choice(image_paths, num_images, replace=False))
     image_files.append(image_files[0]) # loop to first image
@@ -295,7 +310,20 @@ def generate_warp_video(num_images, filename):
     warp_seq[0].save(filename, 
         save_all=True, append_images=warp_seq[1:], duration=5*num_images, loop=0)
 
+image_size = 256
+b = 2
+p = 0.5
+a = 1
+alpha = 0.5
+
+image_dir = "images"
+predictor_path = "pretrained/shape_predictor_68_face_landmarks.dat"
+image_paths = os.listdir(image_dir)
+np.random.shuffle(image_paths)
+
 if __name__ == "__main__":
-    #img = morph_image("images/angelina_jolie.jpg", "images/brad_pitt.jpg", 0.5, True)
-    #img.save("results/warped_a{}_b{}_p{}.png".format(a, b, p))
-    generate_warp_video(10, "results/sequence.gif")
+    start = time()
+    img = morph_image("images/yui_aragaki.png", "images/hoshino_gen.jpg", 0.5, True, False)
+    print("Spent: ", time() - start)
+    img.save("results/warped_test.png".format(a, b, p))
+    #generate_morph_video(10, "results/sequence.gif")
