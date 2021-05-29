@@ -171,7 +171,7 @@ def warp_from_source(img_s, P_s, Q_s, P_d, Q_d):
     to_line_dist = np.abs(v)
     dist = to_p_dist * to_p_mask + to_q_dist * to_q_mask + to_line_dist * to_line_mask
     dest_line_length = np.sqrt(np.sum(dest_line_vec**2, axis=-1))
-    weight = ((dest_line_length**p) / ((a + dist))**b + eps)
+    weight = (dest_line_length**p) / (((a + dist))**b + eps)
     weighted_D = np.sum(D * np.expand_dims(weight, -1), axis=1) / (np.sum(weight, -1, keepdims=True) + eps)
 
     X_d = X_d.squeeze()
@@ -322,7 +322,7 @@ np.random.shuffle(image_paths)
 
 if __name__ == "__main__":
     start = time()
-    img = morph_image("images/yui_aragaki.png", "images/hoshino_gen.jpg", 0.5, True, True)
+    img = morph_image("images/brad_pitt.jpg", "images/angelina_jolie.jpg", 0.5, True, True)
     print("Spent: ", time() - start)
     img.save("results/warped_delaunay.png".format(a, b, p))
     #seq = morph_sequence("images/brad_pitt.jpg", "images/angelina_jolie.jpg", 10, True, True)
