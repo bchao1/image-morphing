@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from utils import get_name_from_file
+from time import time
 
 landmark_dict = {
     "left_eye": np.arange(36, 42),
@@ -198,11 +199,13 @@ def compute_bokeh_image(face, mask):
     return res
 
 def warp_and_merge(img_1, P_1, Q_1, img_2, P_2, Q_2, alpha, face_mask = None):
+    start = time()
     P_inter, Q_inter = get_intermidate_lines(P_1, Q_1, P_2, Q_2, alpha)
     warped_1 = warp_from_source(img_1, P_1, Q_1, P_inter, Q_inter)
     warped_2 = warp_from_source(img_2, P_2, Q_2, P_inter, Q_inter)
     merged = warped_1 * alpha + warped_2 * (1 - alpha)
     merged = merged.astype(np.uint8)
+
     if face_mask is not None:
         merged = compute_bokeh_image(merged, face_mask)
     return merged
@@ -237,6 +240,11 @@ image_paths = os.listdir(image_dir)
 np.random.shuffle(image_paths)
 
 
+def naive_morph(img1, img2, alpha):
+    img = img1 * alpha + img2 * (1 - alpha)
+    img = img.astype(np.uint8)
+    return Image.fromarray(img)
+
 
 def morph_image(image_path_1, image_path_2, alpha, use_face_mask=False):
     detector = dlib.get_frontal_face_detector()
@@ -246,7 +254,7 @@ def morph_image(image_path_1, image_path_2, alpha, use_face_mask=False):
     img_2, color_img_2 = crop_resize_from_feature_points(image_path_2, detector, predictor, image_size)
     P_1, Q_1, landmarks_1 = get_line_start_and_end(img_1, detector, predictor)
     P_2, Q_2, landmarks_2  = get_line_start_and_end(img_2, detector, predictor)
-
+    
     face1_outline = get_face_outline_coordinates(landmarks_1)
     face2_outline = get_face_outline_coordinates(landmarks_2)
 
@@ -269,4 +277,4 @@ def get_random_morph():
 
 if __name__ == "__main__":
     img = morph_image("images/angelina_jolie.jpg", "images/brad_pitt.jpg", 0.5, True)
-    img.save("results/warped.png")
+    img.save("results/warped_a{}_b{}_p{}.png".format(a, b, p))
