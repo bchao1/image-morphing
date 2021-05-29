@@ -293,7 +293,7 @@ def generate_warp_video(num_images, filename):
         warp_seq.extend(warp_sequence(image_path_2, image_path_1, 10, True))
     
     warp_seq[0].save(filename, 
-        save_all=True, append_images=warp_seq[1:], duration=2*num_images, loop=0)
+        save_all=True, append_images=warp_seq[1:], duration=5*num_images, loop=0)
 
 if __name__ == "__main__":
     #img = morph_image("images/angelina_jolie.jpg", "images/brad_pitt.jpg", 0.5, True)
