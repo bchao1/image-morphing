@@ -10,8 +10,18 @@ from time import time
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-from utils import get_name_from_file
+from utils import get_name_from_file, get_arguments
 
+image_size = 256
+b = 2
+p = 0.5
+a = 1
+alpha = 0.5
+
+image_dir = "images"
+predictor_path = "pretrained/shape_predictor_68_face_landmarks.dat"
+image_paths = os.listdir(image_dir)
+np.random.shuffle(image_paths)
 
 landmark_dict = {
     "left_eye": np.arange(36, 42),
@@ -219,6 +229,9 @@ def warp_and_merge(img_1, P_1, Q_1, img_2, P_2, Q_2, alpha, face_mask = None):
     P_inter, Q_inter = get_intermidate_lines(P_1, Q_1, P_2, Q_2, alpha)
     warped_1 = warp_from_source(img_1, P_1, Q_1, P_inter, Q_inter)
     warped_2 = warp_from_source(img_2, P_2, Q_2, P_inter, Q_inter)
+    Image.fromarray(warped_1).save("results/inter_1.png")
+    Image.fromarray(warped_2).save("results/inter_2.png")
+
     merged = warped_1 * alpha + warped_2 * (1 - alpha)
     merged = merged.astype(np.uint8)
 
@@ -294,7 +307,7 @@ def get_random_morph():
     image_path_2 = os.path.join(image_dir, image_paths[face_ids[1]])
     name1 = get_name_from_file(image_paths[face_ids[0]])
     name2 = get_name_from_file(image_paths[face_ids[1]])
-    return morph_image(image_path_1, image_path_2, 0.5, True), name1, name2
+    return morph_image(image_path_1, image_path_2, 0.5, True, False), name1, name2
 
 def generate_morph_video(num_images, filename):
     warp_seq = []
@@ -309,21 +322,25 @@ def generate_morph_video(num_images, filename):
     warp_seq[0].save(filename, 
         save_all=True, append_images=warp_seq[1:], duration=5*num_images, loop=0)
 
-image_size = 256
-b = 2
-p = 0.5
-a = 1
-alpha = 0.5
-
-image_dir = "images"
-predictor_path = "pretrained/shape_predictor_68_face_landmarks.dat"
-image_paths = os.listdir(image_dir)
-np.random.shuffle(image_paths)
-
 if __name__ == "__main__":
+    args = get_arguments()
+
+    a = args.a
+    b = args.b
+    p = args.p
+    predictor_path = args.predictor_path
+    image_size = args.image_size
+
     start = time()
-    img = morph_image("images/brad_pitt.jpg", "images/angelina_jolie.jpg", 0.5, True, True)
+
+    if args.gif:
+        gif = morph_sequence(args.img_path_1, args.img_path_2, args.steps, 
+            args.bokeh, args.delaunay)
+        gif[0].save(args.output_path,
+            save_all=True, append_images=gif[1:], duration=args.duration, loop=0)
+    else:
+        img = morph_image(args.img_path_1, args.img_path_2, args.alpha, 
+            args.bokeh, args.delaunay)
+        img.save(args.output_path)
+    
     print("Spent: ", time() - start)
-    img.save("results/warped_delaunay.png".format(a, b, p))
-    #seq = morph_sequence("images/brad_pitt.jpg", "images/angelina_jolie.jpg", 10, True, True)
-    #seq[0].save("results/brad2jolie_delaunay.gif", save_all=True, append_images=seq[1:], duration=5, loop=0)
